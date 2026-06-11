@@ -60,9 +60,31 @@ somewhere non-standard, override the tool paths:
 make CA65=/opt/cc65/bin/ca65 LD65=/opt/cc65/bin/ld65 SP65=/opt/cc65/bin/sp65
 ```
 
+
+---
+## Docker Building (easy)
+
+  ```bash
+  git clone https://github.com/pwsqrd/lynx_smb
+  cd lynx_smb
+
+  # Drop your ROM in rom/ (any filename, matched by checksum)
+  cp /path/to/your/smb.nes rom/
+
+  # Build the image (one-time, ~5 min — compiles cc65 from source)
+  docker build -t lynx_smb_builder .
+
+  # Run the build, get the .lnx out
+  docker run --rm \
+    -v "$PWD/rom:/build/rom" \
+    -v "$PWD/out:/build/out" \
+    lynx_smb_builder
+  ```
+
+
 ---
 
-## Build
+## Build (if you dont like docker)
 
 1. **Supply the NES ROM.** This port does not include any game assets — drop
    your own legally-obtained *Super Mario Bros.* ROM into the `rom/` directory.
