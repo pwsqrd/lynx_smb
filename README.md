@@ -14,9 +14,6 @@ during the build. No copyrighted assets are stored in this repository.
 
 ![Super Mario Bros. running on the Atari Lynx](docs/screenshot.png)
 
-> **Screenshot:** add a capture of the port running (e.g. in an emulator) at
-> `docs/screenshot.png`.
-
 ---
 
 ## How it works
