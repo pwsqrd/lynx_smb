@@ -32,7 +32,7 @@ during the build. No copyrighted assets are stored in this repository.
 * `lynx_port/lynx_audio.s` — NES APU → Mikey audio translation.
 
 The graphics scale factor is NES 8×8 → Lynx 5×5 (160×102 fits a 32-column field
-exactly). See `documentation/` for the NES and Lynx hardware references used.
+exactly).
 
 ---
 
@@ -110,7 +110,28 @@ make CA65=/opt/cc65/bin/ca65 LD65=/opt/cc65/bin/ld65 SP65=/opt/cc65/bin/sp65
 | `make clean` | Remove object files and the linked ROM |
 | `make distclean` | Also remove all extracted/generated assets |
 | `make TILE_MODE=5x4` | Alternate tile scaling (more vertical content, smaller tiles, more draw calls) → `out/smb_5x4.lnx` |
-| `make VSCROLL_MODE=PROPORTIONAL` | Pick a vertical-scroll behaviour (5x5 only) |
+| `make VSCROLL_MODE=THREE_POS` | Choose a vertical-scroll behaviour, 5×5 only (see below) |
+
+### Vertical scroll modes (5×5 only)
+
+The Lynx screen (102 px tall) is far shorter than the NES's (240 px), so the
+5×5 build scrolls the camera vertically to keep Mario in frame. *How* it scrolls
+is chosen at build time with `VSCROLL_MODE=`. Three behaviours are available:
+
+| `VSCROLL_MODE` | Behaviour |
+|----------------|-----------|
+| *(unset)* or `PLATFORM_LOCK` | **Default.** Platform-lock: the camera follows Mario *down* immediately, but only pans *up* after he has stood still briefly (~0.13 s). Keeps the framing steady and stops the view lurching upward on every jump. Snaps between ground / mid / top positions. |
+| `TWO_POS` | Two-position snap between a ground camera and a raised camera, with a dead zone and velocity gating to prevent oscillation. Snappier and simpler. |
+| `THREE_POS` | Three-position snap (ground / mid / top) with dead zones — finer vertical framing than `TWO_POS`. |
+
+In every mode the camera eases toward its target (±2 px/frame) and holds still
+during pipe transitions, level entry, and death; water levels never scroll
+vertically. The alternate 5×4 build fits more rows on screen and does not scroll
+vertically, so `VSCROLL_MODE` has no effect there.
+
+```bash
+make VSCROLL_MODE=THREE_POS
+```
 
 ---
 
@@ -119,7 +140,6 @@ make CA65=/opt/cc65/bin/ca65 LD65=/opt/cc65/bin/ld65 SP65=/opt/cc65/bin/sp65
 ```
 lynx_port/        Port source (ca65 assembly) + linker config + hardware include
 tools/            ROM verification + asset-extraction pipeline (Python / sp65)
-documentation/    NES and Atari Lynx hardware references
 rom/              Place your NES ROM here (gitignored)
 docs/             Screenshot and other docs
 Makefile          Build orchestration
