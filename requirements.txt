@@ -1,0 +1,10 @@
+# Python dependencies for the asset-extraction pipeline (tools/).
+# Everything else the tools import is part of the Python 3 standard library.
+#
+#   pip install -r requirements.txt
+#
+# Verify what is installed:
+#   pip check
+#   python3 -c "import PIL; print('Pillow', PIL.__version__)"
+
+Pillow>=9.0
