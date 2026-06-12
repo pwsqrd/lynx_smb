@@ -39,11 +39,14 @@ exactly).
 ## Prerequisites
 
 * **[cc65](https://cc65.github.io/)** — provides `ca65`, `ld65`, and `sp65`,
-  plus the Lynx target library (`lynx.lib`). Install from your package manager
-  or build from source:
-  * Debian/Ubuntu: `sudo apt install cc65`
-  * macOS (Homebrew): `brew install cc65`
-  * From source: <https://github.com/cc65/cc65>
+  plus the Lynx target library (`lynx.lib`). 
+  Don't use you package manager, compile from source:
+  ```bash
+  git clone https://github.com/cc65/cc65.git
+  # The exact commit this port is tested against (see Dockerfile CC65_COMMIT):
+  cd cc65 && git checkout c720c3c4854cf36befbb7d1b19fdb207f7549882
+  make -j"$(nproc)" && sudo make install PREFIX=/usr/local
+  ```
 * **Python 3** with **[Pillow](https://pypi.org/project/Pillow/)** — the only
   third-party Python dependency, used by the asset-extraction scripts. Install
   it with `pip install -r requirements.txt`.

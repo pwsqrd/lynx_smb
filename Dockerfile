@@ -9,9 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     && rm -rf /var/lib/apt/lists/*
 
-# Build cc65 from source (latest HEAD) — the Debian 2.19 package has a PCX
-# reader bug that skips row-padding bytes and rejects Pillow's extended palette.
-RUN git clone --depth 1 https://github.com/cc65/cc65.git /tmp/cc65 \
+
+# Fix for potential build issues with different versions of cc65
+# This commit is the exact toolchain the port is developed and tested against.
+ARG CC65_COMMIT=c720c3c4854cf36befbb7d1b19fdb207f7549882
+RUN git clone https://github.com/cc65/cc65.git /tmp/cc65 \
+    && git -C /tmp/cc65 checkout "$CC65_COMMIT" \
     && make -C /tmp/cc65 -j$(nproc) \
     && make -C /tmp/cc65 install PREFIX=/usr/local \
     && rm -rf /tmp/cc65
