@@ -1,0 +1,20 @@
+# Normalize line endings on checkin; let git pick native EOL on checkout...
+* text=auto
+
+# ...except scripts that MUST stay LF or they break on Windows/WSL
+# (CRLF in a shell script corrupts the shebang and every command with \r).
+*.sh    text eol=lf
+*.py    text eol=lf
+
+# Assembler / build sources: keep LF for consistency across platforms.
+*.s     text eol=lf
+*.inc   text eol=lf
+*.cfg   text eol=lf
+Makefile text eol=lf
+
+# Binary assets — never touch.
+*.png   binary
+*.pcx   binary
+*.bin   binary
+*.lnx   binary
+*.o     binary
