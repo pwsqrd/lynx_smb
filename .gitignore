@@ -1,0 +1,5 @@
+character_data/
+build/
+tools/__pycache__/
+out/
+rom/*.nes
