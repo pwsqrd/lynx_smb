@@ -6,7 +6,7 @@
 ; CHEAT_SCREEN = 4                ; Interstitial (world/lives)
 .endif
 
-CHEAT_INFINITE_LIVES = 1          ; Infinite lives (never decrements)
+CHEAT_INFINITE_LIVES = 0          ; Infinite lives (never decrements)
 
 ; Uncomment to start at a specific world/level:
 ;CHEAT_START_WORLD = 2             ; 0-7 = World 1-8
