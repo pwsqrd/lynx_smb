@@ -4,17 +4,16 @@ rem ---------------------------------------------------------------------------
 rem  Super Mario Bros. for the Atari Lynx - one-click Windows build.
 rem
 rem  1. Install Docker Desktop (https://www.docker.com/products/docker-desktop/)
-rem  2. Put this .bat file and your SMB .nes ROM in the same folder.
-rem  3. Double-click this file. The finished smb.lnx appears in that folder.
+rem  2. Download this repo (Code -> Download ZIP) and extract it.
+rem  3. Put your SMB .nes ROM in the rom folder.
+rem  4. Double-click this file. The finished smb.lnx appears in this folder.
 rem
 rem  Build options can be passed on the command line, e.g.
 rem    build-windows.bat TILE_MODE=5x4
 rem ---------------------------------------------------------------------------
 
-set "REPO_ZIP=https://github.com/pwsqrd/lynx_smb/archive/refs/heads/main.zip"
 set "IMAGE=lynx_smb_builder"
 set "HERE=%~dp0"
-set "WORK=%HERE%lynx_smb_build"
 
 cd /d "%HERE%"
 
@@ -22,11 +21,19 @@ echo.
 echo === Super Mario Bros. Lynx builder ===
 echo.
 
-rem --- The ROM must be next to this file ------------------------------------
-if exist "*.nes" goto :rom_found
-echo ERROR: No .nes ROM found in this folder:
-echo   %HERE%
-echo Put your Super Mario Bros. ROM next to this .bat file and run it again.
+rem --- This file must be run from inside the repo ----------------------------
+if exist "Dockerfile" goto :repo_found
+echo ERROR: This file must be inside the lynx_smb folder.
+echo Download the repo from GitHub (Code, then Download ZIP), extract it,
+echo and run build-windows.bat from the extracted folder.
+goto :fail
+:repo_found
+
+rem --- The ROM goes in the rom folder ---------------------------------------------
+if exist "rom\*.nes" goto :rom_found
+echo ERROR: No .nes ROM found. Put your Super Mario Bros. ROM in this folder:
+echo   %HERE%rom
+echo and run this file again.
 goto :fail
 :rom_found
 
@@ -63,41 +70,23 @@ goto :fail
 :docker_ready
 echo Docker is running.
 
-rem --- Fresh work folder with the latest source --------------------------------
-if exist "%WORK%" rmdir /s /q "%WORK%"
-mkdir "%WORK%\rom"
-mkdir "%WORK%\out"
-
-echo.
-echo Downloading the latest source...
-curl.exe -fsSL -o "%WORK%\source.zip" "%REPO_ZIP%"
-if errorlevel 1 (
-    echo ERROR: Download failed. Check your internet connection.
-    goto :fail
-)
-tar.exe -xf "%WORK%\source.zip" -C "%WORK%"
-if errorlevel 1 (
-    echo ERROR: Could not unpack the source.
-    goto :fail
-)
-
-copy /y "*.nes" "%WORK%\rom\" >nul
-
 rem --- Build ------------------------------------------------------------------
 echo.
 echo Building the build environment (about 5 minutes the first time)...
-docker build -t %IMAGE% "%WORK%\lynx_smb-main"
+docker build -t %IMAGE% .
 if errorlevel 1 (
     echo ERROR: Building the Docker image failed - see the messages above.
     goto :fail
 )
 
+if not exist "out" mkdir "out"
+
 echo.
 echo Building the game...
 if "%~1"=="" (
-    docker run --rm -v "%WORK%\rom:/build/rom" -v "%WORK%\out:/build/out" %IMAGE%
+    docker run --rm -v "%HERE%rom:/build/rom" -v "%HERE%out:/build/out" %IMAGE%
 ) else (
-    docker run --rm -v "%WORK%\rom:/build/rom" -v "%WORK%\out:/build/out" %IMAGE% make %*
+    docker run --rm -v "%HERE%rom:/build/rom" -v "%HERE%out:/build/out" %IMAGE% make %*
 )
 if errorlevel 1 (
     echo ERROR: The game build failed - see the messages above.
@@ -106,13 +95,12 @@ if errorlevel 1 (
     goto :fail
 )
 
-copy /y "%WORK%\out\*.lnx" "%HERE%" >nul
-rmdir /s /q "%WORK%"
+copy /y "out\*.lnx" "%HERE%" >nul
 
 echo.
 echo === Done! ===
 echo Your game is in: %HERE%
-dir /b "%HERE%*.lnx"
+dir /b "*.lnx"
 echo Open the .lnx file in a Lynx emulator such as GearLynx or Felix.
 echo.
 pause

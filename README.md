@@ -16,6 +16,25 @@ during the build. No copyrighted assets are stored in this repository.
 
 ---
 
+## Windows quickstart
+
+1. Install **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**
+   and restart your PC. (Skip this if you already have it.)
+2. Download this repo: click the green **Code** button at the top of this page →
+   **Download ZIP**, then extract it (e.g. to `C:\temp`).
+3. Put your Super Mario Bros. `.nes` ROM in the **`rom`** folder.
+4. Double-click **`build-windows.bat`**.
+5. When it says **Done!**, `smb.lnx` is next to `build-windows.bat`. Open it in a
+   Lynx emulator.
+
+The first build takes about 5 minutes; after that it's much quicker.
+
+If Windows shows *"Windows protected your PC"*, click **More info → Run anyway**.
+If it says the ROM wasn't found, your ROM is the wrong version — see the ROM
+table under [Build](#build-if-you-dont-like-docker).
+
+---
+
 ## How it works
 
 | NES | Lynx | Translation |
