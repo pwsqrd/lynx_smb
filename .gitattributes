@@ -18,3 +18,6 @@ Makefile text eol=lf
 *.bin   binary
 *.lnx   binary
 *.o     binary
+
+# Windows batch files need CRLF or cmd.exe misparses labels.
+*.bat   text eol=crlf
