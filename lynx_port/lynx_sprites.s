@@ -88,6 +88,11 @@ GameModeValue         = 1
 GameOverModeValue     = 3
 GameEngineSubroutine  = $0e
 AreaType              = $074e
+Player_State          = $1d
+Player_X_Speed        = $57
+PlayerSize            = $0754
+SavedJoypadBits       = $06fc
+Up_Dir                = %00001000
 
 ; NES tile grid → pixel conversion
 .ifdef TILE_5x5
@@ -98,6 +103,8 @@ CAMERA_Y_MIN    = 14            ; highest camera (two tiles above ground default
 CAMERA_Y_MID    = 24            ; mid camera (for three-position mode)
 CAMERA_Y_MAX    = 34            ; lowest camera (ground row 11 at screen_y 92)
 DWELL_FRAMES    = 8             ; platform-lock dwell threshold (~133ms at 60fps)
+LOOKUP_SMALL    = 12            ; look-up camera raise, small Mario (keeps head on screen)
+LOOKUP_BIG      = 20            ; look-up camera raise, big Mario
 TILE_SIZE       = 16            ; literal 2bpp 5x5 = 16 bytes per tile
 .else
 NES_TILE_W      = 5
@@ -213,10 +220,6 @@ LogoSpriteData:
 HUDLabelMario:
     .byte $16,$0A,$1B,$12,$18   ; "MARIO"
 HUDLabelMario_End:
-
-HUDLabelTime:
-    .byte $1D,$12,$16,$0E       ; "TIME"
-HUDLabelTime_End:
 
 ; -----------------------------------------------------------------------------
 ; Sprite Tile Data - All 256 sprite tiles (Pattern Table 0) as literal 2bpp
@@ -427,6 +430,7 @@ CurrentHOFF:    .res 1          ; Current HOFF value for this frame (0-9)
 .ifdef TILE_5x5
 CurrentYOffset: .res 1          ; Dynamic vertical offset (replaces static LYNX_Y_OFFSET)
 TargetYOffset:  .res 1          ; Target Y offset (computed from player position)
+LerpTarget:     .res 1          ; Effective target this frame (TargetYOffset or look-up)
 .ifndef VSCROLL_THREE_POS
 .ifndef VSCROLL_TWO_POS
 VScrollDwell:   .res 1          ; Frame counter for platform-lock dwell detection
@@ -2159,27 +2163,66 @@ UpdateVerticalScroll:
     rts
 
 @lerp:
+    ; Look-up overrides the target while held; TargetYOffset is left
+    ; untouched so releasing Up returns to the normal framing.
+    jsr LookUpTarget
+    bcs @have_target
+    lda TargetYOffset
+@have_target:
+    sta LerpTarget
     lda CurrentYOffset
-    cmp TargetYOffset
+    cmp LerpTarget
     beq @done                   ; already at target
     bcc @move_up
     ; current > target -> decrease
     sec
     sbc #2
-    cmp TargetYOffset
+    cmp LerpTarget
     bcs :+
-    lda TargetYOffset           ; don't overshoot
+    lda LerpTarget              ; don't overshoot
 :   sta CurrentYOffset
     rts
 @move_up:
     clc
     adc #2
-    cmp TargetYOffset
+    cmp LerpTarget
     bcc :+
     beq :+
-    lda TargetYOffset           ; don't overshoot
+    lda LerpTarget              ; don't overshoot
 :   sta CurrentYOffset
 @done:
+    rts
+
+; LookUpTarget - Sonic-style look-up: holding Up while standing still on the
+; ground raises the camera by LOOKUP_SMALL/LOOKUP_BIG (clamped at offset 0).
+; Distances keep Mario's head on screen when standing on the ground.
+; Out: C=1, A=camera offset if looking up; C=0 otherwise. Clobbers A, X.
+LookUpTarget:
+    lda GameEngineSubroutine
+    cmp #$08                    ; PlayerCtrlRoutine (normal player control)
+    bne @no
+    lda Player_State
+    bne @no                     ; jumping/falling/climbing
+    lda Player_X_Speed
+    bne @no                     ; walking/skidding
+    lda SavedJoypadBits
+    and #Up_Dir
+    beq @no
+    lda TargetYOffset
+    sec
+    sbc #LOOKUP_SMALL
+    bcc @top
+    ldx PlayerSize
+    bne @yes                    ; small Mario
+    sbc #(LOOKUP_BIG - LOOKUP_SMALL)
+    bcs @yes
+@top:
+    lda #0
+@yes:
+    sec
+    rts
+@no:
+    clc
     rts
 .endif
 

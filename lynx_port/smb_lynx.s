@@ -906,14 +906,7 @@ NonMaskableInterrupt:
                lda Mirror_PPU_CTRL_REG2  ;otherwise reenable bits and save them
                ora #%00011110
 ScreenOff:     sta Mirror_PPU_CTRL_REG2  ;save bits for later but not in register at the moment
-               and #%11100111            ;disable screen for now
-               sta PPU_CTRL_REG2
-               ldx PPU_STATUS            ;reset flip-flop and reset scroll registers to zero
-               lda #$00
-               jsr InitScroll
-               sta PPU_SPR_ADDR          ;reset spr-ram address register
-               lda #$02                  ;perform spr-ram DMA access on $0200-$02ff
-               sta SPR_DMA
+               ; (NES $2001/$2005/$2003/$4014 writes removed: write-only shadows on Lynx)
                ldx VRAM_Buffer_AddrCtrl  ;load control for pointer to buffer contents
                lda VRAM_AddrTable_Low,x  ;set indirect at $00 to pointer
                sta $00
@@ -929,8 +922,6 @@ InitBuffer:    ldx VRAM_Buffer_Offset,y
                stz VRAM_Buffer1_Offset,x        
                stz VRAM_Buffer1,x
                stz VRAM_Buffer_AddrCtrl  ;reinit address control to $0301
-               lda Mirror_PPU_CTRL_REG2  ;copy mirror of $2001 to register
-               sta PPU_CTRL_REG2
                jsr SoundEngine           ;play sound
                jsr SyncLynxAudio         ;translate BSS shadows → Lynx audio hardware
                jsr ReadJoypads           ;read joypads
@@ -974,10 +965,6 @@ RotPRandomBit: ror PseudoRandomBitReg,x  ;rotate carry into d7, and rotate last 
                beq @skip_spr_move
                jsr MoveSpritesOffscreen
 @skip_spr_move:
-               lda HorizontalScroll      ;set scroll registers from variables
-               sta PPU_SCROLL_REG
-               lda VerticalScroll
-               sta PPU_SCROLL_REG
                lda Mirror_PPU_CTRL_REG1  ;load saved mirror of $2000
                pha
                sta PPU_CTRL_REG1
@@ -985,8 +972,7 @@ RotPRandomBit: ror PseudoRandomBitReg,x  ;rotate carry into d7, and rotate last 
                lsr
                bcs SkipMainOper
                jsr OperModeExecutionTree ;otherwise do one of many, many possible subroutines
-SkipMainOper:  lda PPU_STATUS            ;reset flip-flop
-               pla
+SkipMainOper:  pla
                ora #%10000000            ;reactivate NMIs
                sta PPU_CTRL_REG1
                lda #$01
@@ -2548,9 +2534,7 @@ UpdateScreen:  ldx PPU_STATUS            ;reset flip-flop
                ldy #$00                  ;load first byte from indirect as a pointer
                lda ($00),y  
                bne WriteBufferToScreen   ;if byte is zero we have no further updates to make here
-InitScroll:    sta PPU_SCROLL_REG        ;store contents of A into scroll registers
-               sta PPU_SCROLL_REG        ;and end whatever subroutine led us here
-               rts
+InitScroll:    rts                       ;scroll register writes removed (unused on Lynx)
 
 ;-------------------------------------------------------------------------------------
 
@@ -7681,10 +7665,6 @@ SetXMoveAmt: sty $00                 ;set movement amount here
 
 MaxSpdBlockData:
       .byte $06, $08
-
-ResidualGravityCode:
-      ldy #$00       ;this part appears to be residual,
-      .byte $2c        ;no code branches or jumps to it...
 
 ImposeGravityBlock:
       ldy #$01       ;set offset for maximum speed
@@ -13042,14 +13022,6 @@ BlockBufferChk_Enemy:
       tax
       pla        ;pull A from stack and jump elsewhere
       jmp BBChk_E
-
-ResidualMiscObjectCode:
-      txa
-      clc           ;supposedly used once to set offset for
-      adc #$0d      ;miscellaneous objects
-      tax
-      ldy #$1b      ;supposedly used once to set offset for block buffer data
-      jmp ResJmpM   ;probably used in early stages to do misc to bg collision detection
 
 BlockBufferChk_FBall:
          ldy #$1a                  ;set offset for block buffer adder data
