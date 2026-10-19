@@ -103,9 +103,13 @@ startup:
         sta     DISPCTL
 
         ; Initialize I/O
+        ; REST must be an output driven to 1 or Mikey's LCD rest signal never
+        ; reaches the display: the Lynx I shows a black screen (the Lynx II
+        ; doesn't care). The boot ROM leaves it as input/0 - see hardware
+        ; spec, Mikey bugs. Matches cc65 crt0 ($1A/$1B).
         lda     #(AUDIN_BIT | RESTLESS | CART_ADDR_DATA)
         sta     IODIR
-        lda     #CART_ADDR_DATA
+        lda     #(RESTLESS | CART_ADDR_DATA)
         sta     IODAT
 
         ; Initialize Suzy
@@ -138,15 +142,19 @@ startup:
         lda     #(NES_VBLANK_FLAG | NES_SPRITE0_FLAG)
         sta     PPU_STATUS
 
-        ; Clear both framebuffers ($BC20-$FBFF) to avoid garbage on first frame.
-        ; 63 pages ($3F × 256 = 16,128 bytes): from $BC20 covers to $FB1F.
+        ; Clear both framebuffers ($BE20-$FDFF) to avoid garbage on first frame.
+        ; FB1 overlaps Suzy/Mikey ($FC00-$FDFF), so map both chips out (MAPCTL
+        ; B1+B0) while clearing; safe because IRQs are still disabled here.
+        ; 63 pages ($3F × 256 = 16,128 bytes): from $BE20 covers to $FD1F.
+        lda     #(MAPCTL_NORMAL | $03)
+        sta     MAPCTL
         lda     #<FRAMEBUFFER_0
         sta     $00
         lda     #>FRAMEBUFFER_0
         sta     $01
         lda     #$00
         ldy     #$00
-        ldx     #$3F            ; 63 pages = 16,128 bytes ($BC20-$FB1F)
+        ldx     #$3F            ; 63 pages = 16,128 bytes ($BE20-$FD1F)
 @clr_fb:
         sta     ($00),y
         iny
@@ -154,14 +162,16 @@ startup:
         inc     $01
         dex
         bne     @clr_fb
-        ; Clear remaining tail of FB1 ($FB20-$FBFF, 224 bytes) that the
-        ; page loop couldn't reach without hitting Suzy registers at $FC00.
+        ; Clear remaining tail of FB1 ($FD20-$FDFF, 224 bytes) without
+        ; running into HIGHDATA at $FE00.
         ldy     #$00
 @clr_tail:
-        sta     $FB20,y
+        sta     $FD20,y
         iny
-        cpy     #$E0            ; 224 bytes ($FB20-$FBFF)
+        cpy     #$E0            ; 224 bytes ($FD20-$FDFF)
         bne     @clr_tail
+        lda     #MAPCTL_NORMAL  ; Suzy/Mikey registers back
+        sta     MAPCTL
 
         ; Initialize double buffer state then swap once so that:
         ;   - Display shows FB1 (fully cleared above, safe to show)

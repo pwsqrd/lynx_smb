@@ -1,24 +1,24 @@
 # Lynx Port — Memory Budget
 
-Last updated: 2026-02-19
-Reflects: build/smb_lynx.map (BSS ends $BC1F, startup segment $0800-$08E2)
+Last updated: 2026-10-19
+Reflects: ld65 -m map of current objects (RODATA ends $BC11, MAIN limit $BE1F)
 
 ## Memory Regions Summary
 
 | Region | Range | Total | Used | Free | Notes |
 |--------|-------|-------|------|------|-------|
-| Zero Page | $0000–$00FF | 256 B | 21 B | **235 B** | $0015–$00FF free; fastest RAM |
+| Zero Page | $0000–$00FF | 256 B | SMB | — | SMB owns ZP at runtime (see lynx_port.cfg) |
 | Stack | $0100–$01FF | 256 B | reserved | — | 6502 hardware stack |
 | NES game vars | $0200–$07FF | 1536 B | ~1536 B | 0 B | SMB RAM, all in use |
-| RECYCLEDATA | $0800–$08D2 | 211 B | 0 B | **211 B** | Dead startup code overlay; BSS only; no code |
-| irq_handler | $08D3–$08E2 | 16 B | 16 B | 0 B | Persistent VBlank handler; must not be overwritten |
-| CODE+RODATA | $08E3–$B9F1 | — | all | 0 B | Game code and tables |
-| BSS | $B9F2–$BC1F | 558 B | 558 B | 0 B | Game BSS; zero slack |
-| FRAMEBUF0 | $BC20–$DC1F | 8192 B | 8192 B | 0 B | Display buffer; not general RAM |
-| FRAMEBUF1 | $DC20–$FBFF | 8160 B | 8160 B | 0 B | Display buffer; not general RAM |
-| Suzy HW | $FC00–$FCFF | 256 B | HW | — | Hardware registers; cannot remap |
-| Mikey HW | $FD00–$FD9F | 160 B | HW | — | Hardware registers |
-| HIGHDATA | $FE00–$FFF7 | 504 B | 12 B | **492 B** | ROM-remapped RAM via MAPCTL B2; BSS only |
+| RECYCLEDATA | $0800–$08D2 | 211 B | 132 B | **79 B** | Dead startup code overlay; BSS only; no code |
+| STARTUP | $0800–$08FB | 252 B | all | — | irq_handler inside it must stay live (above RECYCLEDATA) |
+| CODE+RODATA | $08FC–$BC11 | — | all | — | Game code and tables (no BSS in MAIN) |
+| MAIN slack | $BC12–$BE1F | 526 B | 0 B | **526 B** | Free for code/RODATA/BSS |
+| FRAMEBUF0 | $BE20–$DE1F | 8192 B | 8192 B | 0 B | $1FE0 display + $20 gap ($DE00–$DE1F, CPU-visible RAM) |
+| FRAMEBUF1 | $DE20–$FDFF | 8160 B | 8160 B | 0 B | Last $200 lies under Suzy/Mikey: Suzy + display DMA see RAM, CPU sees registers |
+| Suzy HW | $FC00–$FCFF | 256 B | HW | — | CPU-side registers (RAM beneath holds FB1 tail) |
+| Mikey HW | $FD00–$FDFF | 256 B | HW | — | CPU-side registers (RAM beneath holds FB1 tail) |
+| HIGHDATA | $FE00–$FFF7 | 504 B | 500 B | **4 B** | ROM-remapped RAM via MAPCTL B2; BSS only |
 | Vectors | $FFFA–$FFFF | 6 B | 6 B | 0 B | NMI/RESET/IRQ in RAM (MAPCTL B3) |
 
 ## Allocation Log

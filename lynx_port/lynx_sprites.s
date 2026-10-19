@@ -52,6 +52,7 @@
 .export LynxRenderIntermediate
 .export LynxRenderGameOver
 .export LynxRenderVictory
+.export LynxRenderWarpZone
 .export VictoryMsgMax
 .export LynxTimeUpFlag
 .export LynxRenderHUD
@@ -72,6 +73,7 @@
 .import DisplayDigits, GameTimerDisplay
 .import CoinTally, CurrentPlayer
 .import AltEntranceControl
+.import WarpZoneControl, WarpZoneWelcome, WarpZoneNumbers
 .import Sprite_Data
 .ifdef TILE_5x5
 .importzp Player_Y_Position, Player_Y_HighPos, Player_Y_Speed
@@ -217,10 +219,6 @@ ClockTile2bpp:
 LogoSpriteData:
     .incbin "build/logo_sprite.bin"
 
-HUDLabelMario:
-    .byte $16,$0A,$1B,$12,$18   ; "MARIO"
-HUDLabelMario_End:
-
 ; -----------------------------------------------------------------------------
 ; Sprite Tile Data - All 256 sprite tiles (Pattern Table 0) as literal 2bpp
 ; Each tile is exactly 13 bytes (literal 2bpp 5x4)
@@ -246,25 +244,38 @@ MetatileIndex:
 ; -----------------------------------------------------------------------------
 ; Metatile Tile Data - dense blob of defined metatile sprites (literal 2bpp 10x8)
 ; Each metatile is exactly 33 bytes (sp65 literal 2bpp 10x8)
-; Indexed via MetatileIndex table: MetatileTileData + dense_index * 33
+; Indexed via MetatileIndex table, then MetatileAddrLo/Hi
 ; Built by tools/build_metatiles.py
 ; -----------------------------------------------------------------------------
 MetatileTileData:
     .incbin "build/metatile_tiles.bin"
+MetatileTileData_End:
+
+; Sprite data address of each dense metatile (replaces a per-tile N*41 / N*33)
+METATILE_COUNT = (MetatileTileData_End - MetatileTileData) / METATILE_SIZE
+MetatileAddrLo:
+.repeat METATILE_COUNT, i
+    .byte <(MetatileTileData + i * METATILE_SIZE)
+.endrepeat
+MetatileAddrHi:
+.repeat METATILE_COUNT, i
+    .byte >(MetatileTileData + i * METATILE_SIZE)
+.endrepeat
 
 ; ScaleTable removed — replaced by ScaleCoord subroutine in CODE segment
 
 ; -----------------------------------------------------------------------------
 ; FlipTable - NES attribute flip bits -> Lynx SPRCTL0 value
 ; Index = (NES attributes >> 6) & 3
-; Value = SPRCTL0: 2bpp (bits 7-6 = %01), type 4 normal (bits 2-0), +flip bits
-; Type 4 makes pen 0 transparent (critical for sprite overlays)
+; Value = SPRCTL0: 2bpp (bits 7-6 = %01), type 5 non-collide (bits 2-0), +flip bits
+; Type 5 makes pen 0 transparent (critical for sprite overlays) and skips
+; collision RAM traffic (this port never uses hardware collision)
 ; -----------------------------------------------------------------------------
 FlipTable:
-    .byte (BPP_2 | TYPE_NORMAL)            ; 0: no flip
-    .byte (BPP_2 | HFLIP | TYPE_NORMAL)    ; 1: HFLIP
-    .byte (BPP_2 | VFLIP | TYPE_NORMAL)    ; 2: VFLIP
-    .byte (BPP_2 | HFLIP | VFLIP | TYPE_NORMAL) ; 3: H+V FLIP
+    .byte (BPP_2 | TYPE_NONCOLL)            ; 0: no flip
+    .byte (BPP_2 | HFLIP | TYPE_NONCOLL)    ; 1: HFLIP
+    .byte (BPP_2 | VFLIP | TYPE_NONCOLL)    ; 2: VFLIP
+    .byte (BPP_2 | HFLIP | VFLIP | TYPE_NONCOLL) ; 3: H+V FLIP
 
 ; -----------------------------------------------------------------------------
 ; Title screen text strings (NES BG tile indices)
@@ -362,7 +373,7 @@ TextYPos:       .res 1          ; Current Y pixel position
 TextLen:        .res 1          ; Remaining characters to draw
 
 ; Double buffer state
-DrawBufHi:      .res 1          ; High byte of draw buffer ($BC=FB0, $DC=FB1)
+DrawBufHi:      .res 1          ; High byte of draw buffer ($BE=FB0, $DE=FB1)
 
 ; VRAM write state
 ShadowPPUHi:    .res 1          ; PPU address high byte shadow
@@ -387,6 +398,12 @@ NesPaletteShadow: .res 32
 ; Sprite rendering state (used by LynxRenderSprites)
 OAMIndex:       .res 1          ; Current OAM offset (0, 4, 8, ..., 252)
 
+; Warp zone text state (used by LynxRenderWarpZone)
+WarpTextPage:   .res 1          ; Latched world page of the text (odd), 0 = none
+WarpTextZone:   .res 1          ; Latched WarpZoneControl value (4-6)
+WarpBaseL:      .res 1          ; Lynx X of the text page start (16-bit, signed)
+WarpBaseH:      .res 1
+
 ; =============================================================================
 ; BSS SEGMENT - (empty; all render vars moved to RECYCLEDATA/HIGHDATA)
 ; =============================================================================
@@ -396,7 +413,7 @@ OAMIndex:       .res 1          ; Current OAM offset (0, 4, 8, ..., 252)
 ; =============================================================================
 ; HIGHDATA SEGMENT - High RAM ($FE00-$FFF7, always RAM via MAPCTL B2)
 ; =============================================================================
-; Variables moved here to keep BSS below $BC20 (framebuffer start).
+; Variables moved here to keep BSS below FRAMEBUFFER_0.
 ; Add future variables here rather than in BSS to avoid overflow.
 
 .segment "HIGHDATA"
@@ -420,7 +437,7 @@ TextPtr:        .res 2          ; Pointer to text string data (copied to ZP $02/
 ; BG redraw state (used by LynxRedrawBG)
 BGBufIdx:       .res 1          ; Block buffer column index (0-31)
 BGCol:          .res 1          ; Current metatile column counter (0-15)
-BGRow:          .res 1          ; Current metatile row counter (5-12)
+BGRowY:         .res 1          ; Current row offset into render buffer (row * 16)
 BGXPos:         .res 1          ; Current X pixel position
 BGXPosHi:       .res 1          ; Current X pixel position (high byte, sign extension)
 BGYPos:         .res 1          ; Current Y pixel position
@@ -439,24 +456,24 @@ VScrollDwell:   .res 1          ; Frame counter for platform-lock dwell detectio
 .endif
 BGBufPtrL:      .res 1          ; Render buffer column pointer (low) - safe copy
 BGBufPtrH:      .res 1          ; Render buffer column pointer (high) - safe copy
-MetaAddrLo:     .res 1          ; Metatile sprite data address (low)
-MetaAddrHi:     .res 1          ; Metatile sprite data address (high)
 RowYPos:        .res 13         ; Precomputed Y pixel position for rows 0-12
-RowVisible:     .res 13         ; Precomputed visibility flag for rows 0-12 (1=visible)
+BGRowStartY:    .res 1          ; First visible row * 16 ($FF = none)
+BGRowEndY:      .res 1          ; (Last visible row + 1) * 16
+BGBlankFill:    .res 1          ; Metatile drawn for blank cells ($87 water, else 0)
+BGLastPal:      .res 1          ; Palette bits ($00/$40/$80/$C0) Suzy holds, $FF = none
 
 ; Render buffers - parallel to Block_Buffer_1/2, unfiltered metatile data
 ; Same 13×16 layout as block buffers (rows spaced $10 apart)
-; In HIGHDATA to keep BSS below $BC20 (framebuffer start)
+; In HIGHDATA to keep BSS below FRAMEBUFFER_0
 Render_Buffer_1: .res 208       ; 13 rows × 16 cols (columns 0-15)
 Render_Buffer_2: .res 208       ; 13 rows × 16 cols (columns 16-31)
 
 ; =============================================================================
 ; FRAMEBUF0 / FRAMEBUF1 SEGMENTS - Auto-placed by linker immediately after BSS
 ; =============================================================================
-; Linker assertion (lynx_port.cfg) fires at build time if BSS overflows past $BC1F.
-; With 12 bytes of overflow moved to HIGHDATA, BSS ends at $BC1F and:
-;   FRAMEBUF0 → $BC20 (= FRAMEBUFFER_0 in lynx_hw.inc)
-;   FRAMEBUF1 → $DC20 (= FRAMEBUFFER_1 in lynx_hw.inc)
+; Linker assertion (lynx_port.cfg) fires at build time if MAIN overflows past $BE1F.
+;   FRAMEBUF0 → $BE20 (= FRAMEBUFFER_0 in lynx_hw.inc)
+;   FRAMEBUF1 → $DE20 (= FRAMEBUFFER_1 in lynx_hw.inc), ends $FDFF under Suzy/Mikey
 ; If either address shifts, the build will error and you must move vars to HIGHDATA.
 
 .segment "FRAMEBUF0"
@@ -468,10 +485,10 @@ Framebuffer0:   .res $1FE0      ; 8,160 bytes (160×102 at 4bpp) — framebuffer
 .export Framebuffer1
 Framebuffer1:   .res $1FE0      ; 8,160 bytes (160×102 at 4bpp) — framebuffer 1
 
-; Build-time layout checks: if BSS overflows past $BC1F these will fail at link.
+; Build-time layout checks: if MAIN overflows past $BE1F these will fail at link.
 ; Fix: move new BSS variables to .segment "HIGHDATA" instead of .bss.
-.assert Framebuffer0 = FRAMEBUFFER_0, error, "FB0 not at $BC20 - check linker config FB0MEM start address"
-.assert Framebuffer1 = FRAMEBUFFER_1, error, "FB1 not at $DC20 - check linker config FB1MEM start address"
+.assert Framebuffer0 = FRAMEBUFFER_0, error, "FB0 not at $BE20 - check linker config FB0MEM start address"
+.assert Framebuffer1 = FRAMEBUFFER_1, error, "FB1 not at $DE20 - check linker config FB1MEM start address"
 
 ; =============================================================================
 ; CODE SEGMENT
@@ -686,11 +703,10 @@ LynxDrawSprite:
     lda #>SCB_SPRCTL0
     sta SCBNEXTH
 
-    ; Enable Suzy bus and start sprite engine
+    ; Start sprite engine (SUZYBUSEN is set once at startup, and the previous
+    ; sprite-done was already acknowledged at the end of the last launch)
     lda #$01
-    sta SUZYBUSEN
     sta SPRGO
-    stz SDONEACK                ; Acknowledge any previous sprite-done
 
     ; Wait for sprite engine to finish
     ; Felix requires CPUSLEEP to yield bus to Suzy, and interrupts
@@ -715,8 +731,9 @@ LynxDrawSprite:
 ; =============================================================================
 
 SetupTileSCB:
-    ; SPRCTL0: 1bpp (%00 in bits 7-6), background type 0
-    stz SCB_SPRCTL0
+    ; SPRCTL0: 1bpp, background-noncollide (opaque, no collision RAM traffic)
+    lda #(BPP_1 | TYPE_BACKNONCOLL)
+    sta SCB_SPRCTL0
 
     ; SPRCTL1: literal, reload HSIZE/VSIZE
     lda #(LITERAL | REHV)
@@ -847,7 +864,7 @@ LynxDrawTile:
     lda #>TextTile2bpp
     adc #0                      ; propagate carry from low byte add
     sta SCB_DATA_H
-    lda #(BPP_2 | TYPE_BACKGROUND)  ; SPRCTL0: 2bpp, type 0
+    lda #(BPP_2 | TYPE_BACKNONCOLL)  ; SPRCTL0: 2bpp, type 1 (opaque)
     sta SCB_SPRCTL0
     lda #(LITERAL | REHV)       ; SPRCTL1: literal, reload HSIZE/VSIZE
     sta SCB_SPRCTL1
@@ -861,7 +878,8 @@ LynxDrawTile:
     stz SCB_VPOS_H
     jsr LynxDrawSprite
     ; Restore 1bpp mode
-    stz SCB_SPRCTL0             ; SPRCTL0: 1bpp, type 0
+    lda #(BPP_1 | TYPE_BACKNONCOLL)
+    sta SCB_SPRCTL0             ; SPRCTL0: back to 1bpp opaque
 
 @skip:
     rts
@@ -925,7 +943,7 @@ LynxDrawTextLine:
 
 ClearFramebuffer:
     ; SPRCTL0: 4bpp, background type (all pens drawn)
-    lda #(BPP_4 | TYPE_BACKGROUND)
+    lda #(BPP_4 | TYPE_BACKNONCOLL)
     sta SCB_SPRCTL0
     ; SPRCTL1: literal, reload HSIZE/VSIZE
     lda #(LITERAL | REHV)
@@ -1070,7 +1088,7 @@ LynxDrawTitleElements:
     ; --- Draw logo ---
     ; Reuse SetupTileSCB for common SCB fields, then override for packed 2bpp logo
     jsr SetupTileSCB
-    lda #(BPP_2 | TYPE_BACKGROUND)  ; SPRCTL0: 2bpp, type 0 (logo is 2bpp packed)
+    lda #(BPP_2 | TYPE_BACKNONCOLL)  ; SPRCTL0: 2bpp, type 1 (logo is 2bpp packed)
     sta SCB_SPRCTL0
     lda #(PACKED | REHV)        ; SPRCTL1: packed (not literal), reload HSIZE/VSIZE
     sta SCB_SPRCTL1
@@ -1545,27 +1563,159 @@ VicDrawWorld8Msgs:
     jmp LynxDrawTextLine
 
 ; =============================================================================
+; LynxRenderWarpZone - Draw "WELCOME TO WARP ZONE!" and the pipe numbers
+; =============================================================================
+; ScrollLockObject_Warp writes this text into NES nametable 1 via VRAM_Buffer1,
+; which never reaches the Lynx, so redraw it here in world coords. Call while
+; HOFF is still set for the BG. Nametable 1 is the odd world page on screen when
+; the scroll lock fires; page and zone are latched then so the text stays put
+; (like nametable text) if WarpZoneControl or the scroll changes afterwards.
+;
+; NES layout: text at row 12 col 4, pipe numbers at row 17 cols 5/13/21.
+; Clobbers: A, X, Y
+; =============================================================================
+
+WARP_TEXT_LEN   = 21            ; "WELCOME TO WARP ZONE!" ($15)
+WARP_TEXT_ROW   = 12
+WARP_NUM_ROW    = 17
+
+LynxRenderWarpZone:
+    lda WarpZoneControl
+    cmp #$04                    ; 4-6 = text printed by ScrollLockObject_Warp
+    bcs @active
+    stz WarpTextPage            ; not in a warp zone: drop the latch
+    rts
+@active:
+    lda WarpTextPage
+    bne @latched
+    lda ScreenLeft_PageLoc
+    ora #$01                    ; odd page of the two on screen = nametable 1
+    sta WarpTextPage
+    lda WarpZoneControl
+    sta WarpTextZone
+@latched:
+    ; WarpBase = Lynx X of the text page start, relative to BG column 0
+    ; (screen left rounded down to a metatile; 16 NES px = 10 Lynx px)
+    lda WarpTextPage
+    sec
+    sbc ScreenLeft_PageLoc
+    beq @set_base               ; A=0: text page is the left page
+    cmp #$01
+    beq @right_page
+    rts                         ; text page scrolled out of view
+@right_page:
+    lda #160                    ; one page = 160 Lynx px
+@set_base:
+    sta WarpBaseL
+    lda ScreenLeft_X_Pos
+    lsr
+    lsr
+    lsr
+    lsr                         ; metatile column of screen left (0-15)
+    asl                         ; * 2
+    sta TextYPos                ; temp
+    asl
+    asl                         ; * 8
+    adc TextYPos                ; * 10 (C clear: max 120)
+    sta TextYPos
+    lda WarpBaseL
+    sec
+    sbc TextYPos
+    sta WarpBaseL
+    lda #0
+    sbc #0
+    sta WarpBaseH
+
+    jsr SetupTileSCB
+    lda #(BPP_1 | TYPE_NONCOLL)  ; 1bpp, type 5 (pen 0 transparent)
+    sta SCB_SPRCTL0
+    lda DynPenPal0+2            ; NES attribute $AA: BG palette 2 (white)
+    sta SCB_PALETTE
+    lda DynPenPal1+2
+    sta SCB_PALETTE+1
+
+    ; --- "WELCOME TO WARP ZONE!" (3-byte VRAM header precedes tile data) ---
+.ifdef TILE_5x5
+    lda #(WARP_TEXT_ROW * NES_TILE_H)
+    sec
+    sbc CurrentYOffset
+.else
+    lda #NES_ROW_PX(WARP_TEXT_ROW)
+.endif
+    sta TextYPos
+    lda #NES_COL_PX(4)
+    jsr WarpSetX
+    lda #<(WarpZoneWelcome+3)
+    sta TextPtr
+    lda #>(WarpZoneWelcome+3)
+    sta TextPtr+1
+    lda #WARP_TEXT_LEN
+    sta TextLen
+    jsr LynxDrawTextLine
+
+    ; --- Pipe numbers: WarpZoneNumbers + (zone-4)*4, one above each pipe ---
+.ifdef TILE_5x5
+    lda #(WARP_NUM_ROW * NES_TILE_H)
+    sec
+    sbc CurrentYOffset
+.else
+    lda #NES_ROW_PX(WARP_NUM_ROW)
+.endif
+    sta TextYPos
+    lda WarpTextZone
+    sec
+    sbc #$04
+    asl
+    asl
+    tay                         ; Y = offset of this zone's numbers
+    lda #NES_COL_PX(5)
+    jsr WarpDrawNum
+    lda #NES_COL_PX(13)
+    jsr WarpDrawNum
+    lda #NES_COL_PX(21)
+    ; fall through
+
+; Helper: draw WarpZoneNumbers,y at column X offset A, then advance Y
+WarpDrawNum:
+    jsr WarpSetX
+    lda WarpZoneNumbers,y       ; $24 = space, skipped by LynxDrawTile
+    phy
+    jsr LynxDrawTile
+    ply
+    iny
+    rts
+
+; Helper: TextXPos/Hi = WarpBase + A
+WarpSetX:
+    clc
+    adc WarpBaseL
+    sta TextXPos
+    lda WarpBaseH
+    adc #0
+    sta TextXPosHi
+    rts
+
+; =============================================================================
 ; LynxRenderHUD - Draw score, coins, world-level, and timer during gameplay
 ; =============================================================================
 ; Reads game variables directly and renders as text tiles at Y=0.
 ; Only active when OperMode == GameModeValue and OperMode_Task >= 3
 ; (active gameplay, not during interstitial or setup screens).
 ;
-; Layout (single row at Y=0, top of Lynx screen):
-;   Score  (X=5):   6 BCD digits from DisplayDigits
-;   Coins  (X=45):  "C" + 2 digits from CoinTally
-;   World  (X=80):  WorldNumber+1, "-", LevelNumber+1
-;   Timer  (X=115): 3 BCD digits from GameTimerDisplay
+; Layout (single row at Y=1, top of Lynx screen), 13 sprites:
+;   Score  (left,   X=5):   6 BCD digits from DisplayDigits
+;   Coins  (centre, X=70):  coin icon + "x" + 2 digits from CoinTally
+;   Timer  (right,  X=133): clock icon + 3 BCD digits from GameTimerDisplay
+; No player name or world-level: they never change during a level, and each
+; tile is a separate sprite launch.
 ;
 ; Clobbers: A, X, Y
 ; =============================================================================
 
 HUD_VALUE_Y     = 1             ; Values row at top
-HUD_PLAYER_X    = 5
-HUD_SCORE_X     = 34
-HUD_COINS_X     = 74
-HUD_WORLD_X     = 106
-HUD_TIMER_X     = 135
+HUD_SCORE_X     = 5
+HUD_COINS_X     = 80 - 2 * NES_TILE_W               ; 4 tiles centred on 80
+HUD_TIMER_X     = 160 - 5 - (3 * NES_TILE_W + NES_TILE_W + 2) ; clock + gap + 3 digits, 5px margin
 
 LynxRenderHUD:
     ;rts                         ; HUD disabled (TODO: re-enable when ready)
@@ -1582,23 +1732,12 @@ LynxRenderHUD:
 @task_ok:
 
     jsr SetupTileSCB
-    lda #(BPP_1 | TYPE_NORMAL)  ; 1bpp, type 4 (pen 0 = transparent)
+    lda #(BPP_1 | TYPE_NONCOLL)  ; 1bpp, type 5 (pen 0 = transparent)
     sta SCB_SPRCTL0
 
-    ; === Values row (score, coins, world-level, timer) ===
+    ; === Values row (score, coins, timer) ===
     lda #HUD_VALUE_Y
     sta TextYPos
-
-    ;" MARIO" (or "LUIGI") label above score
-    lda #<HUDLabelMario
-    sta TextPtr
-    lda #>HUDLabelMario
-    sta TextPtr+1
-    lda #HUD_PLAYER_X
-    sta TextXPos
-    lda #(HUDLabelMario_End - HUDLabelMario)
-    sta TextLen
-    jsr LynxDrawTextLine
 
     ; --- Score: 6 BCD digits from DisplayDigits ---
     lda #HUD_SCORE_X
@@ -1658,20 +1797,6 @@ LynxRenderHUD:
     pla
     jsr LynxDrawTile
 
-    ; --- World-Level: digit, "-", digit ---
-    lda #HUD_WORLD_X
-    sta TextXPos
-    lda WorldNumber
-    clc
-    adc #1
-    jsr DrawTileAdvX
-    lda #$28                    ; "-"
-    jsr DrawTileAdvX
-    lda LevelNumber
-    clc
-    adc #1
-    jsr LynxDrawTile
-
     ; --- Timer: clock icon (2bpp) + 3 BCD digits from GameTimerDisplay ---
     lda #HUD_TIMER_X
     sta TextXPos
@@ -1681,7 +1806,7 @@ LynxRenderHUD:
     sta SCB_PALETTE
     lda DynPenPal1+2
     sta SCB_PALETTE+1
-    lda #(BPP_2 | TYPE_NORMAL)  ; SPRCTL0: 2bpp, type 4 (pen 0 transparent)
+    lda #(BPP_2 | TYPE_NONCOLL)  ; SPRCTL0: 2bpp, type 5 (pen 0 transparent)
     sta SCB_SPRCTL0
     lda #<ClockTile2bpp
     sta SCB_DATA_L
@@ -1695,7 +1820,7 @@ LynxRenderHUD:
     stz SCB_VPOS_H
     jsr LynxDrawSprite
     ; Restore 1bpp mode + BG palette 0 for timer digits
-    lda #(BPP_1 | TYPE_NORMAL)  ; 1bpp, type 4
+    lda #(BPP_1 | TYPE_NONCOLL)  ; 1bpp, type 5
     sta SCB_SPRCTL0
     lda DynPenPal0+0
     sta SCB_PALETTE
@@ -1800,6 +1925,11 @@ LynxRenderSprites:
 @skip_player:
     jmp @next_sprite
 :
+    ; Tile $FC is the NES blank sprite tile (fully transparent) - SMB uses it
+    ; for unused halves of objects, so skip the launch entirely
+    ldy OAM_BASE+1,x
+    cpy #$FC
+    beq @skip_player
 
     ; Check sprite priority against current pass
     pha                         ; save Y position
@@ -1988,7 +2118,7 @@ LynxRenderSprites:
 :
 
     ; Restore SCB_SPRCTL0 to BG mode for subsequent tile draws
-    lda #(BPP_2 | TYPE_BACKGROUND)
+    lda #(BPP_2 | TYPE_BACKNONCOLL)
     sta SCB_SPRCTL0
 
     ; Restore ZP $00/$01
@@ -2269,7 +2399,7 @@ LynxRedrawBG:
     pha
 
     ; Configure SCB for metatile rendering
-    lda #(BPP_2 | TYPE_BACKGROUND)  ; 2bpp, type 0 (background/opaque)
+    lda #(BPP_2 | TYPE_BACKNONCOLL)  ; 2bpp, type 1 (opaque, no collision)
     sta SCB_SPRCTL0
     lda #(LITERAL | REHV)       ; literal, reload HSIZE/VSIZE
     sta SCB_SPRCTL1
@@ -2309,7 +2439,11 @@ LynxRedrawBG:
     ; Sub-metatile scroll offset is now handled by Suzy HOFF register
     ; (set by SetScrollHOFF before this function is called)
 
-    ; --- Precompute row Y positions and visibility flags ---
+    ; --- Precompute row Y positions and the visible row range ---
+    ; Rows are top-to-bottom, so the visible ones form one contiguous range.
+    lda #$FF
+    sta BGRowStartY                 ; none yet
+    stz BGRowEndY
     ldx #0                          ; row counter
 @precomp_row:
 .ifdef TILE_5x5
@@ -2348,15 +2482,35 @@ LynxRedrawBG:
     cmp #248
     bcs @row_vis
 .endif
-    stz RowVisible,x
     bra @row_next
 @row_vis:
-    lda #1
-    sta RowVisible,x
+    txa
+    asl
+    asl
+    asl
+    asl                             ; row * 16 (render buffer row stride)
+    ldy BGRowStartY
+    cpy #$FF
+    bne :+
+    sta BGRowStartY                 ; first visible row
+:   clc
+    adc #$10
+    sta BGRowEndY                   ; one row past the last visible row
 @row_next:
     inx
     cpx #13
     bne @precomp_row
+
+    ; Blank cells are skipped, except on water levels where they show water
+    ldx #$00
+    lda AreaType
+    bne :+
+    ldx #$87                        ; water metatile
+:   stx BGBlankFill
+
+    lda #$FF
+    sta BGLastPal               ; first tile loads palette and size
+    stz SCB_HPOS_H              ; BG X is always 0-169 in world coords
 
     ; --- Column loop: 17 metatile columns (16 + 1 partial at right edge) ---
     stz BGCol
@@ -2371,6 +2525,7 @@ LynxRedrawBG:
     clc
     adc BGXPos                  ; * 10
     sta BGXPos
+    sta SCB_HPOS_L              ; same X for every tile in the column
 
     ; Compute render buffer base address for this column
     ; Columns 0-15 → Render_Buffer_1+col, 16-31 → Render_Buffer_2+(col&$0F)
@@ -2400,141 +2555,74 @@ LynxRedrawBG:
     sta $07
 @rbuf_set:
 
-    ; --- Row loop: metatile rows 2-12 (visible rows on Lynx) ---
-    stz BGRow
-
-@row_loop:
-    ; Check precomputed visibility — skip entire row if off-screen
-    ldx BGRow
-    lda RowVisible,x
-    bne @row_ok
-    jmp @next_row
-@row_ok:
-
-    ; Reload ZP pointer from safe HIGHDATA copy (NMI may have trashed $06/$07)
-    lda BGBufPtrL
-    sta $06
-    lda BGBufPtrH
-    sta $07
-    ; Read metatile byte from render buffer
-    ; Layout: rows spaced $10 apart, same as block buffer
-    lda BGRow
-    asl
-    asl
-    asl
-    asl                         ; row * 16
+    ; --- Row scan: Y = row * 16 over the visible range ---
+    ; Kept tight because most cells are blank sky; $06/$07 only need reloading
+    ; after a draw (the NMI can only run inside LynxDrawSprite).
+    ldy BGRowStartY
+    cpy BGRowEndY
+    bcc @scan
+    jmp @rows_done              ; no visible rows
+@scan:
+    lda ($06),y                 ; metatile byte from render buffer
+    bne @cell
+    ora BGBlankFill             ; blank: water metatile on water levels, else skip
+    bne @cell
+@scan_next:
+    tya
+    clc
+    adc #$10
     tay
-    lda ($06),y                 ; read metatile byte from render buffer
+    cpy BGRowEndY
+    bcc @scan
+    bra @rows_done
 
-    ; Skip if zero (sky/blank) — but on water levels, fill with water metatile
-    bne @not_blank
-    lda AreaType
-    bne @skip_blank           ; non-water: skip as before
-    lda #$87                  ; water: substitute water metatile
-    bra @not_blank
-@skip_blank:
-    jmp @next_row
-@not_blank:
+@cell:
+    sty BGRowY
     sta BGMetaByte
 
-    ; Use precomputed Y position (visibility already checked at row_loop entry)
-    ldx BGRow
-    lda RowYPos,x
-    sta BGYPos
-
     ; Look up dense index from metatile index table
-    ldx BGMetaByte
+    tax
     lda MetatileIndex,x         ; dense index ($FF = undefined)
     cmp #$FF
-    bne @has_metatile
-    jmp @next_row               ; skip undefined metatiles
-@has_metatile:
-    tax                         ; X = dense index (0-100)
+    beq @cell_done              ; skip undefined metatiles
+    tax                         ; X = dense index
 
-    ; Extract palette from original metatile byte (bits 7-6 → 0-3)
+    ; Sprite data address from the precomputed table
+    lda MetatileAddrLo,x
+    sta SCB_DATA_L
+    lda MetatileAddrHi,x
+    sta SCB_DATA_H
+
+    ; Palette from metatile bits 7-6. Suzy keeps the palette and size from
+    ; the previous launch, so only reload them when the palette changes.
     lda BGMetaByte
     and #$C0
+    cmp BGLastPal
+    beq @same_pal
+    sta BGLastPal
     asl
     rol
     rol
-    tay                         ; Y = palette index (0-3)
-
-    ; Set pen palette for this metatile's palette
-    lda DynPenPal0,y
+    tax                         ; X = palette index (0-3)
+    lda DynPenPal0,x
     sta SCB_PALETTE
-    lda DynPenPal1,y
+    lda DynPenPal1,x
     sta SCB_PALETTE+1
+    lda #(LITERAL | REHV)       ; reload size + palette
+    bra @set_ctl1
+@same_pal:
+    lda #(LITERAL | REUSEPAL)   ; reuse size + palette
+@set_ctl1:
+    sta SCB_SPRCTL1
 
-.ifdef TILE_5x5
-    ; Compute MetatileTileData + X * 41 (X = dense index, max 100)
-    ; N*41 = (N*5) * 8 + N; all shifts done 16-bit to avoid overflow
-    stx MetaAddrLo                  ; MetaAddrLo:Hi = N (16-bit)
-    stz MetaAddrHi
-    ; N*4 (16-bit shift)
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*2
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*4
-    ; + N = N*5
-    txa
-    clc
-    adc MetaAddrLo
-    sta MetaAddrLo
-    bcc :+
-    inc MetaAddrHi
-:
-    ; (N*5) * 8 = N*40
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*10
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*20
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*40
-    ; + N = N*41
-    txa
-    clc
-    adc MetaAddrLo
-    sta MetaAddrLo
-    bcc :+
-    inc MetaAddrHi
-:
-.else
-    ; Compute MetatileTileData + X * 33 (X = dense index)
-    ; N*33 = N*32 + N
-    stx MetaAddrLo
-    stz MetaAddrHi
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*2
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*4
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*8
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*16
-    asl MetaAddrLo
-    rol MetaAddrHi                  ; N*32
-    txa
-    clc
-    adc MetaAddrLo
-    sta MetaAddrLo
-    bcc :+
-    inc MetaAddrHi
-:
-.endif
-    ; Add MetatileTileData base address
-    lda MetaAddrLo
-    clc
-    adc #<MetatileTileData
-    sta SCB_DATA_L
-    lda MetaAddrHi
-    adc #>MetatileTileData
-    sta SCB_DATA_H
-
-    ; Set position
-    lda BGXPos
-    sta SCB_HPOS_L
-    stz SCB_HPOS_H                  ; BGXPosHi is always 0 in world coords
-    lda BGYPos
+    ; Y from the precomputed row table (X was set per column)
+    tya
+    lsr
+    lsr
+    lsr
+    lsr                             ; row
+    tax
+    lda RowYPos,x
     sta SCB_VPOS_L
     stz SCB_VPOS_H
 .ifdef TILE_5x5
@@ -2550,14 +2638,16 @@ LynxRedrawBG:
     ; Render the metatile sprite
     jsr LynxDrawSprite
 
-@next_row:
-    inc BGRow
-    lda BGRow
-    cmp #13                     ; rows 5-12 (8 metatile rows)
-    beq @rows_done
-    jmp @row_loop
-@rows_done:
+    ; NMI may have run during the draw: reload the ZP pointer
+    lda BGBufPtrL
+    sta $06
+    lda BGBufPtrH
+    sta $07
+@cell_done:
+    ldy BGRowY
+    jmp @scan_next
 
+@rows_done:
     ; Advance to next buffer column (wrapping at 32)
     lda BGBufIdx
     clc

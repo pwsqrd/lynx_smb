@@ -2,12 +2,14 @@
 ; LYNX_HW.INC - Shared hardware constants for Lynx port
 ; =============================================================================
 ; Framebuffer addresses: auto-placed by linker after BSS (see lynx_port.cfg).
-; Linker assertion enforces BSS stays below $BC20.
-; FB0=$BC20, FB1=$DC20, each $1FE0 bytes (160×102 at 4bpp).
+; Linker assertion enforces BSS stays below $BE20.
+; FB0=$BE20, FB1=$DE20, each $1FE0 bytes (160×102 at 4bpp).
+; FB1 ends at $FDFF, overlapping Suzy/Mikey ($FC00-$FDFF) - the sprite engine
+; and display DMA see RAM there, the CPU does not.
 ; =============================================================================
 
-FRAMEBUFFER_0   = $BC20         ; Framebuffer 0 (linker auto-places FRAMEBUF0 here)
-FRAMEBUFFER_1   = $DC20         ; Framebuffer 1 (linker auto-places FRAMEBUF1 here)
+FRAMEBUFFER_0   = $BE20         ; Framebuffer 0 (linker auto-places FRAMEBUF0 here)
+FRAMEBUFFER_1   = $DE20         ; Framebuffer 1 (linker auto-places FRAMEBUF1 here)
 
 ; Memory Map Control register ($FFF9) - always hardware, cannot be remapped
 MAPCTL          = $FFF9

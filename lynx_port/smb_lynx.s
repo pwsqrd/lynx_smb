@@ -19,6 +19,7 @@
 .export DisplayDigits, GameTimerDisplay
 .export CoinTally, CurrentPlayer
 .export AltEntranceControl
+.export WarpZoneControl, WarpZoneWelcome, WarpZoneNumbers
 .export Sprite_Data
 .ifdef TILE_5x5
 .exportzp Player_Y_Position, Player_Y_HighPos, Player_Y_Speed
@@ -32,6 +33,7 @@
 .import LynxRenderHUD
 .import LynxRenderGameOver
 .import LynxRenderVictory
+.import LynxRenderWarpZone
 .import VictoryMsgMax
 .import LynxTimeUpFlag
 .import LynxDrawTitleElements
@@ -842,6 +844,7 @@ EndlessLoop: lda FrameReady               ;has NMI finished a frame?
              sta SprPriorityPass          ;pass 1: behind-BG sprites
              jsr LynxRenderSprites        ;behind-BG sprites (world coords)
              jsr LynxRedrawBG             ;BG tiles (world coords, HOFF offsets)
+             jsr LynxRenderWarpZone       ;warp zone text (world coords, HOFF offsets)
              stz SprPriorityPass          ;pass 2: front sprites (default)
              jsr LynxRenderSprites        ;front sprites (world coords)
              jsr ResetHOFF               ;HOFF=0 for screen-fixed elements
@@ -4303,7 +4306,9 @@ GetRenderBufferAddr:
       clc
       adc RenderBufferAddr,y   ;add to low byte
       sta $08                  ;store here and leave
-      rts
+      bcc :+                   ;render buffers are not page-aligned, so
+      inc $09                  ;carry into the high byte when one straddles a page
+:     rts
 
 ;-------------------------------------------------------------------------------------
 ;WriteRenderBuffer - Mirror a block buffer write to the render buffer
@@ -16393,7 +16398,7 @@ NesLenCtrTbl:
 
 ;-------------------------------------------------------------------------------------
 ; No padding needed - VIDBAS/DISPADR low byte set to $20 (not $00), so
-; framebuffers start at $BC20/$DC20 with no DMA overlap into BSS.
+; framebuffers start at $BE20/$DE20 with no DMA overlap into BSS.
 ;-------------------------------------------------------------------------------------
 
 ;-------------------------------------------------------------------------------------
