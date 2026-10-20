@@ -95,6 +95,7 @@ Player_X_Speed        = $57
 PlayerSize            = $0754
 SavedJoypadBits       = $06fc
 Up_Dir                = %00001000
+Down_Dir              = %00000100
 
 ; NES tile grid → pixel conversion
 .ifdef TILE_5x5
@@ -107,6 +108,7 @@ CAMERA_Y_MAX    = 34            ; lowest camera (ground row 11 at screen_y 92)
 DWELL_FRAMES    = 8             ; platform-lock dwell threshold (~133ms at 60fps)
 LOOKUP_SMALL    = 12            ; look-up camera raise, small Mario (keeps head on screen)
 LOOKUP_BIG      = 20            ; look-up camera raise, big Mario
+LOOKDOWN_MAX    = (12 + 3) * 10 - 102 ; look-down limit: bottom of row 12 at screen bottom
 TILE_SIZE       = 16            ; literal 2bpp 5x5 = 16 bytes per tile
 .else
 NES_TILE_W      = 5
@@ -2293,9 +2295,9 @@ UpdateVerticalScroll:
     rts
 
 @lerp:
-    ; Look-up overrides the target while held; TargetYOffset is left
-    ; untouched so releasing Up returns to the normal framing.
-    jsr LookUpTarget
+    ; Look up/down overrides the target while held; TargetYOffset is left
+    ; untouched so releasing the d-pad returns to the normal framing.
+    jsr LookTarget
     bcs @have_target
     lda TargetYOffset
 @have_target:
@@ -2323,11 +2325,12 @@ UpdateVerticalScroll:
 @done:
     rts
 
-; LookUpTarget - Sonic-style look-up: holding Up while standing still on the
-; ground raises the camera by LOOKUP_SMALL/LOOKUP_BIG (clamped at offset 0).
+; LookTarget - Sonic-style look up/down: holding Up (or Down) while standing
+; still on the ground moves the camera by LOOKUP_SMALL/LOOKUP_BIG. Up clamps at
+; offset 0, Down at LOOKDOWN_MAX so the view never goes below the bottom row.
 ; Distances keep Mario's head on screen when standing on the ground.
-; Out: C=1, A=camera offset if looking up; C=0 otherwise. Clobbers A, X.
-LookUpTarget:
+; Out: C=1, A=camera offset if looking; C=0 otherwise. Clobbers A, X.
+LookTarget:
     lda GameEngineSubroutine
     cmp #$08                    ; PlayerCtrlRoutine (normal player control)
     bne @no
@@ -2337,7 +2340,21 @@ LookUpTarget:
     bne @no                     ; walking/skidding
     lda SavedJoypadBits
     and #Up_Dir
+    bne @up
+    lda SavedJoypadBits
+    and #Down_Dir
     beq @no
+    lda #LOOKUP_SMALL
+    ldx PlayerSize
+    bne :+                      ; small Mario
+    lda #LOOKUP_BIG
+:   clc
+    adc TargetYOffset
+    cmp #LOOKDOWN_MAX
+    bcc @yes
+    lda #LOOKDOWN_MAX
+    bra @yes
+@up:
     lda TargetYOffset
     sec
     sbc #LOOKUP_SMALL
